@@ -1,11 +1,15 @@
 import dash
 import polars as pl
-from dash import dcc, html, Input, Output, State, _dash_renderer
+from dash import dcc, html, Input, Output, State, _dash_renderer, dash_table
 import plotly.graph_objects as go
 import dash_mantine_components as dmc
 from datetime import datetime
 from scipy import stats
 import numpy as np
+from dash_ag_grid import AgGrid
+import base64
+import io
+import pandas as pd
 
 _dash_renderer._set_react_version("18.2.0")
 
@@ -103,145 +107,208 @@ aggregation_methods = ["Sum", "Mean", "Min", "Max", "Count"]
 app.layout = dmc.MantineProvider(
     children=[
         html.H1("Dynamic Chart with Rolling Window"),
-        # Data type selectors for X, Y, and Color axes
+        dmc.NumberInput(
+            id="row-limit",
+            label="Number of Rows to Read",
+            value=100000,
+            min=1,
+            max=1000000,
+            step=1000,
+        ),
+        dcc.Upload(
+            id="upload-data",
+            children=html.Div(["Drag and Drop or ", html.A("Select Files")]),
+            style={
+                "width": "100%",
+                "height": "60px",
+                "lineHeight": "60px",
+                "borderWidth": "1px",
+                "borderStyle": "dashed",
+                "borderRadius": "5px",
+                "textAlign": "center",
+                "margin": "10px",
+            },
+            # Allow multiple files to be uploaded
+            multiple=False,
+        ),
+        dcc.Store(id="stored-data"),
+        html.Div(id="upload-status-message"),
         html.Div(
             [
                 dmc.Card(
                     withBorder=True,
                     shadow="sm",
                     radius="md",
-                    children=dmc.CardSection(children=
-                        [dmc.Grid(
-                            children=[
-                                dmc.GridCol(
-                                    children=dmc.Select(
-                                        id="x-data-type-dropdown",
-                                        data=[
-                                            {"label": "All", "value": "all"},
-                                            {"label": "Date", "value": "date"},
-                                            {
-                                                "label": "Categorical",
-                                                "value": "categorical",
-                                            },
-                                            {
-                                                "label": "Numerical",
-                                                "value": "numerical",
-                                            },
-                                        ],
-                                        value="date",
-                                        label="X-axis Data Type",
+                    children=dmc.CardSection(
+                        children=[
+                            dmc.Grid(
+                                children=[
+                                    dmc.GridCol(
+                                        children=dmc.Select(
+                                            id="x-data-type-dropdown",
+                                            data=[
+                                                {"label": "All", "value": "all"},
+                                                {"label": "Date", "value": "date"},
+                                                {
+                                                    "label": "Categorical",
+                                                    "value": "categorical",
+                                                },
+                                                {
+                                                    "label": "Numerical",
+                                                    "value": "numerical",
+                                                },
+                                            ],
+                                            value="date",
+                                            label="X-axis Data Type",
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                dmc.GridCol(
-                                    children=dmc.Select(
-                                        id="y-data-type-dropdown",
-                                        data=[
-                                            {"label": "All", "value": "all"},
-                                            {"label": "Date", "value": "date"},
-                                            {
-                                                "label": "Categorical",
-                                                "value": "categorical",
-                                            },
-                                            {
-                                                "label": "Numerical",
-                                                "value": "numerical",
-                                            },
-                                        ],
-                                        value="numerical",
-                                        label="Y-axis Data Type",
+                                    dmc.GridCol(
+                                        children=dmc.Select(
+                                            id="y-data-type-dropdown",
+                                            data=[
+                                                {"label": "All", "value": "all"},
+                                                {"label": "Date", "value": "date"},
+                                                {
+                                                    "label": "Categorical",
+                                                    "value": "categorical",
+                                                },
+                                                {
+                                                    "label": "Numerical",
+                                                    "value": "numerical",
+                                                },
+                                            ],
+                                            value="numerical",
+                                            label="Y-axis Data Type",
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                dmc.GridCol(
-                                    children=dmc.Select(
-                                        id="color-data-type-dropdown",
-                                        data=[
-                                            {"label": "All", "value": "all"},
-                                            {"label": "Date", "value": "date"},
-                                            {
-                                                "label": "Categorical",
-                                                "value": "categorical",
-                                            },
-                                            {
-                                                "label": "Numerical",
-                                                "value": "numerical",
-                                            },
-                                        ],
-                                        value="categorical",
-                                        label="Z-axis Data Type",
+                                    dmc.GridCol(
+                                        children=dmc.Select(
+                                            id="color-data-type-dropdown",
+                                            data=[
+                                                {"label": "All", "value": "all"},
+                                                {"label": "Date", "value": "date"},
+                                                {
+                                                    "label": "Categorical",
+                                                    "value": "categorical",
+                                                },
+                                                {
+                                                    "label": "Numerical",
+                                                    "value": "numerical",
+                                                },
+                                            ],
+                                            value="categorical",
+                                            label="Z-axis Data Type",
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                dmc.GridCol(
-                                    children=dmc.Select(
-                                        id="x-axis-dropdown",
-                                        data=[],
-                                        value=None,
-                                        label="X-axis",
+                                    dmc.GridCol(
+                                        children=dmc.Select(
+                                            id="x-axis-dropdown",
+                                            data=[],
+                                            value=None,
+                                            label="X-axis",
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                dmc.GridCol(
-                                    children=dmc.Select(
-                                        id="y-axis-dropdown",
-                                        data=[],
-                                        value=None,
-                                        label="Y-axis",
+                                    dmc.GridCol(
+                                        children=dmc.Select(
+                                            id="y-axis-dropdown",
+                                            data=[],
+                                            value=None,
+                                            label="Y-axis",
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                dmc.GridCol(
-                                    children=dmc.Select(
-                                        id="color-dropdown",
-                                        data=[{"label": "None", "value": "None"}],
-                                        value="None",
-                                        label="Z-axis",
+                                    dmc.GridCol(
+                                        children=dmc.Select(
+                                            id="color-dropdown",
+                                            data=[{"label": "None", "value": "None"}],
+                                            value="None",
+                                            label="Z-axis",
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                dmc.GridCol(
-                                    children=dmc.Select(
-                                        id="aggregation-dropdown",
-                                        data=[
-                                            {"label": method, "value": method}
-                                            for method in aggregation_methods
-                                        ],
-                                        value="Sum",
-                                        label="Aggregation method",
+                                    dmc.GridCol(
+                                        children=dmc.Select(
+                                            id="aggregation-dropdown",
+                                            data=[
+                                                {"label": method, "value": method}
+                                                for method in aggregation_methods
+                                            ],
+                                            value="Sum",
+                                            label="Aggregation method",
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                dmc.GridCol(
-                                    children=dmc.NumberInput(
-                                        id="window-size-input",
-                                        label="Rolling Window Size",
-                                        value=7,
-                                        min=1,
-                                        step=1,
+                                    dmc.GridCol(
+                                        children=dmc.NumberInput(
+                                            id="window-size-input",
+                                            label="Rolling Window Size",
+                                            value=7,
+                                            min=1,
+                                            step=1,
+                                        ),
+                                        span=4,
                                     ),
-                                    span=4,
-                                ),
-                                 dmc.GridCol(
-                                    children=dmc.Button("Generate Chart", id="generate-button", n_clicks=0),
-                                    span=4,
-                                ),
-                            ]
-                        ),
-                                        dmc.Space(h=10)]
+                                    dmc.GridCol(
+                                        children=dmc.Button(
+                                            "Generate Chart",
+                                            id="generate-button",
+                                            n_clicks=0,
+                                        ),
+                                        span=4,
+                                    ),
+                                ]
+                            ),
+                            dmc.Space(h=10),
+                        ]
                     ),
                 ),
-
             ]
         ),
-        # Axis selectors
-        # Aggregation method selector
-        # Rolling window size input
-        # Generate button and graph
-        
+        # Primary line/bar chart
         dcc.Graph(id="bar-chart"),
+        # New boxplot chart for daily distribution
+        dcc.Graph(id="boxplot-chart"),
+        html.Div(id="breach-table-container"),
     ]
 )
+
+
+# Callback to process uploaded file and store content in dcc.Store
+@app.callback(
+    [Output('stored-data', 'data'), Output('upload-status-message', 'children')],
+    Input('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+    State('row-limit', 'value')
+)
+def handle_file_upload(contents, filename, row_limit):
+    if contents is None:
+        return None, "No file uploaded yet."
+    
+    # Decode the uploaded file contents
+    try:
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+
+        # Determine file type and read content
+        if 'csv' in filename:
+            # Read limited rows from CSV
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')), nrows=row_limit)
+        elif 'parquet' in filename:
+            # Read limited rows from Parquet
+            df = pd.read_parquet(io.BytesIO(decoded)).head(row_limit)
+        else:
+            return None, "Unsupported file format. Please upload a CSV or Parquet file."
+
+        # Store data as JSON-compatible dictionary
+        data_store = df.to_dict('records')
+        return data_store, "File uploaded successfully!"
+
+    except Exception as e:
+        return None, f"There was an error processing the file: {str(e)}"
 
 
 # Update axis dropdown options based on selected data types
@@ -278,9 +345,13 @@ def update_axis_dropdowns(x_data_type, y_data_type, color_data_type):
     return x_options, y_options, color_options
 
 
-# Callback to update the chart based on user selections
+# Callback to update the charts based on user selections
 @app.callback(
-    Output("bar-chart", "figure"),
+    [
+        Output("bar-chart", "figure"),
+        Output("boxplot-chart", "figure"),
+        Output("breach-table-container", "children"),
+    ],
     Input("generate-button", "n_clicks"),
     State("x-axis-dropdown", "value"),
     State("y-axis-dropdown", "value"),
@@ -290,12 +361,41 @@ def update_axis_dropdowns(x_data_type, y_data_type, color_data_type):
     prevent_initial_call=True,
 )
 def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
-    fig = go.Figure()
+    # Figure for the main chart (line/bar with rolling mean)
+    fig_main = go.Figure()
+
+    # Figure for the boxplot chart
+    fig_boxplot = go.Figure()
 
     # Determine if x_col is a date column
     is_date_column_flag = x_col in date_columns
 
-    # Select the aggregation method based on user choice
+    # Create boxplot for each date, with color by `color_col` if specified
+    if color_col != "None":
+        # Create boxplots grouped by `color_col`
+        unique_colors = df[color_col].unique().to_list()
+        for color_value in unique_colors:
+            filtered_df = df.filter(pl.col(color_col) == color_value)
+            fig_boxplot.add_trace(
+                go.Box(
+                    x=filtered_df[x_col].to_list(),
+                    y=filtered_df[y_col].to_list(),
+                    name=str(color_value),
+                    boxmean=True,
+                )
+            )
+    else:
+        # Create boxplots for each date without color distinction
+        fig_boxplot.add_trace(
+            go.Box(
+                x=df[x_col].to_list(),
+                y=df[y_col].to_list(),
+                name="All Data Points",
+                boxmean=True,
+            )
+        )
+
+    # Primary chart with line/bar chart logic remains the same as before
     if color_col == "None":
         grouped_df = determine_groupby_method(df, x_col, y_col, color_col, agg_method)
         filtered_df = grouped_df.sort(x_col)
@@ -334,18 +434,16 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
                 )
             )
 
-            # Plot the original data
-            fig.add_trace(
+            fig_main.add_trace(
                 go.Scatter(
                     x=filtered_df[x_col].to_list(),
                     y=filtered_df[y_col].to_list(),
                     mode="lines",
-                    name="Original Data",
                 )
             )
 
             # Plot the rolling mean
-            fig.add_trace(
+            fig_main.add_trace(
                 go.Scatter(
                     x=filtered_df[x_col].to_list(),
                     y=filtered_df["Rolling Mean"].to_list(),
@@ -356,7 +454,7 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
             )
 
             # Plot the confidence interval
-            fig.add_trace(
+            fig_main.add_trace(
                 go.Scatter(
                     x=filtered_df[x_col].to_list() + filtered_df[x_col].to_list()[::-1],
                     y=filtered_df["CI Upper"].to_list()
@@ -370,14 +468,13 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
                 )
             )
         else:
-            fig.add_trace(
+            fig_main.add_trace(
                 go.Bar(
                     x=filtered_df[x_col].to_list(),
                     y=filtered_df[y_col].to_list(),
                 )
             )
     else:
-
         grouped_df = determine_groupby_method(df, x_col, y_col, color_col, agg_method)
         unique_color_values = grouped_df[color_col].unique().to_list()
 
@@ -388,7 +485,7 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
 
             if is_date_column_flag:
                 # Plot each group as a separate line
-                fig.add_trace(
+                fig_main.add_trace(
                     go.Scatter(
                         x=filtered_group[x_col].to_list(),
                         y=filtered_group[y_col].to_list(),
@@ -397,7 +494,7 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
                     )
                 )
             else:
-                fig.add_trace(
+                fig_main.add_trace(
                     go.Bar(
                         x=filtered_group[x_col].to_list(),
                         y=filtered_group[y_col].to_list(),
@@ -405,7 +502,7 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
                     )
                 )
 
-    fig.update_layout(
+    fig_main.update_layout(
         barmode="group" if not is_date_column_flag else "overlay",
         title=f"{'Line' if is_date_column_flag else 'Bar'} Chart of {y_col} vs {x_col} with {agg_method} aggregation",
         xaxis_title=x_col,
@@ -413,7 +510,56 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size):
         hovermode="x unified" if is_date_column_flag else "x",
     )
 
-    return fig
+    fig_boxplot.update_layout(
+        title="Boxplot of Daily Distributions",
+        xaxis_title=x_col,
+        yaxis_title=y_col,
+        boxmode="group",
+    )
+    # Check for breaches in rolling mean
+    breaches = filtered_df.filter(
+        (pl.col("Rolling Mean") < pl.col("CI Lower"))
+        | (pl.col("Rolling Mean") > pl.col("CI Upper"))
+    )
+    # Format breaches for display in AG Grid
+    breach_data = (
+        breaches.select([x_col, "Rolling Mean", "CI Lower", "CI Upper"])
+        .to_pandas()
+        .to_dict("records")
+    )
+
+    # Define column definitions for AG Grid
+    column_defs = [
+        {"headerName": x_col, "field": x_col, "sortable": True, "filter": True},
+        {
+            "headerName": "Rolling Mean",
+            "field": "Rolling Mean",
+            "sortable": True,
+            "filter": True,
+        },
+        {
+            "headerName": "CI Lower",
+            "field": "CI Lower",
+            "sortable": True,
+            "filter": True,
+        },
+        {
+            "headerName": "CI Upper",
+            "field": "CI Upper",
+            "sortable": True,
+            "filter": True,
+        },
+    ]
+
+    # Create AG Grid component
+    breach_table = AgGrid(
+        columnDefs=column_defs,
+        rowData=breach_data,
+        style={"height": "400px", "width": "100%"},
+        dashGridOptions={"pagination": True, "paginationPageSize": 10},
+    )
+
+    return fig_main, fig_boxplot, breach_table
 
 
 # Run the app
