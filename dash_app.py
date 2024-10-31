@@ -345,7 +345,7 @@ def update_axis_dropdowns(data_store, x_data_type, y_data_type, color_data_type)
 
         return x_options, y_options, color_options,"None"
     else: 
-        return [],[],["None"],"None" 
+        return [],[],["None"],"None"
 
 
 
@@ -367,7 +367,35 @@ def update_axis_dropdowns(data_store, x_data_type, y_data_type, color_data_type)
     prevent_initial_call=True,
 )
 def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size, data_store):
+    def is_date_column(column):
+            date_formats = [
+                "%B-%Y",
+                "%b-%Y",
+                "%Y-%m-%d",
+                "%d-%m-%Y",
+                "%m/%d/%Y",
+                "%Y/%m/%d",
+                "%d %b %Y",
+                "%d %B %Y",
+            ] # Extendable list of formats
+
+            for date_format in date_formats:
+                try:
+                    non_null_values = column.drop_nulls()
+                    if non_null_values.is_empty():
+                        continue
+                    # Attempt parsing to check date validity
+                    parsed_dates = [
+                        datetime.strptime(value, date_format) for value in non_null_values
+                    ]
+                    return date_format  # Return matching format if parsing successful
+                except ValueError:
+                    continue
+            return None
     df = pl.from_pandas(pd.DataFrame.from_records(data_store))
+    date_format = is_date_column(df[x_col].cast(str))
+    df = df.with_columns(pl.col(x_col).str.strptime(pl.Date, format=date_format).alias(x_col)
+                )
     # Figure for the main chart (line/bar with rolling mean)
     fig_main = go.Figure()
 
