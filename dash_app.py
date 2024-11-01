@@ -106,7 +106,6 @@ app.layout = dmc.MantineProvider(
                             label="Select columns to load",
                             clearable=True,
                             searchable=True,
-                            limit=8,
                         ),
                     ],
                     span=4,
@@ -330,13 +329,12 @@ def handle_file_upload(contents, filename):
 # Callback to read and display column names for selection
 @app.callback(
     Output("column-dropdown", "data"),
-    Output("column-dropdown", "value"),
     Input("stored-file", "data"),
     State("upload-data", "filename"),
 )
 def populate_column_dropdown(contents, filename):
     if contents is None:
-        return [],None
+        return []
 
     # Decode content and read only headers
     content_type, content_string = contents.split(",")
@@ -348,13 +346,14 @@ def populate_column_dropdown(contents, filename):
         elif "parquet" in filename:
             df = pd.read_parquet(io.BytesIO(decoded)).head(0)
         else:
-            return [],None
+            return []
         data = [{"label": col, "value": col} for col in df.columns]
-        values = [col for col in df.columns]
-        return data,values
+        data.sort(key=lambda x: x["label"])
+
+        return data
 
     except Exception as e:
-        return [],None
+        return []
 
 
 # Callback to read selected columns and store them in JSON-compatible format
