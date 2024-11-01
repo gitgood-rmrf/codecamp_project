@@ -1,6 +1,6 @@
 import dash
 import polars as pl
-from dash import dcc, html, Input, Output, State, _dash_renderer, dash_table
+from dash import dcc, html, Input, Output, State, _dash_renderer, dash_table, no_update
 import plotly.graph_objects as go
 import dash_mantine_components as dmc
 from datetime import datetime
@@ -10,9 +10,12 @@ from dash_ag_grid import AgGrid
 import base64
 import io
 import pandas as pd
+from ydata_profiling import ProfileReport
+import webbrowser
+import os
+
 
 _dash_renderer._set_react_version("18.2.0")
-
 
 
 def determine_groupby_method(df, x_col, y_col, color_col, aggr_method):
@@ -46,6 +49,7 @@ def determine_groupby_method(df, x_col, y_col, color_col, aggr_method):
                 raise ValueError(f"Unsupported aggregation method: {aggr_method}")
     return grouped_df
 
+
 # Initialize Dash app
 app = dash.Dash(__name__)
 
@@ -56,32 +60,55 @@ aggregation_methods = ["Sum", "Mean", "Min", "Max", "Count"]
 app.layout = dmc.MantineProvider(
     children=[
         html.H1("Dynamic Chart with Rolling Window"),
-        dmc.NumberInput(
-            id="row-limit",
-            label="Number of Rows to Read",
-            value=100000,
-            min=1,
-            max=1000000,
-            step=1000,
+        dmc.Grid(
+            [
+                dmc.GridCol(
+                    [
+                        dcc.Upload(
+                            id="upload-data",
+                            children=html.Div(
+                                ["Drag and Drop or ", html.A("Select Files")]
+                            ),
+                            style={
+                                "width": "100%",
+                                "height": "60px",
+                                "lineHeight": "60px",
+                                "borderWidth": "1px",
+                                "borderStyle": "dashed",
+                                "borderRadius": "5px",
+                                "textAlign": "center",
+                                "margin": "10px",
+                            },
+                            # Allow multiple files to be uploaded
+                            multiple=False,
+                        ),
+                        html.Div(id="upload-status-message"),
+                    ],
+                    span=6,
+                ),
+                dmc.GridCol(
+                    [
+                        dmc.NumberInput(
+                            id="row-limit",
+                            label="Number of Rows to Read",
+                            value=100000,
+                            min=1,
+                            max=1000000,
+                            step=1000,
+                        ),
+                    ],
+                    span=2,
+                ),
+                dmc.GridCol(
+                    [
+                        dmc.MultiSelect(
+                            id="column-dropdown", label="Select columns to load"
+                        ),
+                    ],
+                    span=4,
+                ),
+            ]
         ),
-        dcc.Upload(
-            id="upload-data",
-            children=html.Div(["Drag and Drop or ", html.A("Select Files")]),
-            style={
-                "width": "100%",
-                "height": "60px",
-                "lineHeight": "60px",
-                "borderWidth": "1px",
-                "borderStyle": "dashed",
-                "borderRadius": "5px",
-                "textAlign": "center",
-                "margin": "10px",
-            },
-            # Allow multiple files to be uploaded
-            multiple=False,
-        ),
-        dcc.Store(id="stored-data"),
-        html.Div(id="upload-status-message"),
         html.Div(
             [
                 dmc.Card(
@@ -207,7 +234,15 @@ app.layout = dmc.MantineProvider(
                                             id="generate-button",
                                             n_clicks=0,
                                         ),
-                                        span=4,
+                                        span=2,
+                                    ),
+                                    dmc.GridCol(
+                                        children=dmc.Button(
+                                            "Generate Analysis html",
+                                            id="generate-button-2",
+                                            n_clicks=0,
+                                        ),
+                                        span=2,
                                     ),
                                 ]
                             ),
@@ -222,42 +257,173 @@ app.layout = dmc.MantineProvider(
         # New boxplot chart for daily distribution
         dcc.Graph(id="boxplot-chart"),
         html.Div(id="breach-table-container"),
+        html.Div(id="something-placeholder"),
+        dcc.Store(
+            id="stored-file", data=None
+        ),  # Store uploaded file contents in base64
+        dcc.Store(id="stored-data", data=None),  # Store selected data in JSON format
     ]
 )
 
 
-# Callback to process uploaded file and store content in dcc.Store
 @app.callback(
-    [Output('stored-data', 'data'), Output('upload-status-message', 'children')],
-    Input('upload-data', 'contents'),
-    State('upload-data', 'filename'),
-    State('row-limit', 'value')
+    Output(
+        "something-placeholder", "children"
+    ),  # Output is unused, so 'children' with no_update
+    Input("generate-button-2", "n_clicks"),  # Trigger on button click
+    State("stored-data", "data"),
+    State("upload-data", "filename"),
+    prevent_initial_call=True,
 )
-def handle_file_upload(contents, filename, row_limit):
+def generate_html_report(n_clicks, data_store, filename):
+    if n_clicks is None or data_store is None or filename is None:
+        return no_update  # Don't do anything if no click, data, or filename is missing
+
+    file_path = f"{filename}.html"
+
+    # Check if the report already exists
+    if not os.path.exists(file_path):
+        # Create DataFrame and decide report type based on column count
+        df = pd.DataFrame.from_records(data_store)
+
+        # Use minimal report if more than 20 columns, otherwise full report
+        if df.shape[1] > 20:
+            profile = ProfileReport(df, title="Profiling Report", minimal=True)
+        else:
+            profile = ProfileReport(df, title="Profiling Report", minimal=False)
+
+        # Save the profile report to file
+        profile.to_file(file_path)
+
+    # Open the report in the default web browser
+    webbrowser.open(file_path)
+
+    return no_update  # No update needed for the placeholder
+
+
+# Callback to store the uploaded file content without reading it
+@app.callback(
+    [
+        Output("stored-file", "data"),
+        Output("upload-status-message", "children", allow_duplicate=True),
+    ],
+    Input("upload-data", "contents"),
+    State("upload-data", "filename"),
+    prevent_initial_call=True,
+)
+def handle_file_upload(contents, filename):
     if contents is None:
         return None, "No file uploaded yet."
-    
-    # Decode the uploaded file contents
+
     try:
-        content_type, content_string = contents.split(',')
-        decoded = base64.b64decode(content_string)
-
-        # Determine file type and read content
-        if 'csv' in filename:
-            # Read limited rows from CSV
-            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')), nrows=row_limit)
-        elif 'parquet' in filename:
-            # Read limited rows from Parquet
-            df = pd.read_parquet(io.BytesIO(decoded)).head(row_limit)
-        else:
-            return None, "Unsupported file format. Please upload a CSV or Parquet file."
-
-        # Store data as JSON-compatible dictionary
-        data_store = df.to_dict('records')
-        return data_store, "File uploaded successfully!"
+        # Store file content in base64 format without reading it
+        return contents, "File uploaded successfully! Select columns to load."
 
     except Exception as e:
         return None, f"There was an error processing the file: {str(e)}"
+
+
+# Callback to read and display column names for selection
+@app.callback(
+    Output("column-dropdown", "data"),
+    Input("stored-file", "data"),
+    State("upload-data", "filename"),
+)
+def populate_column_dropdown(contents, filename):
+    if contents is None:
+        return []
+
+    # Decode content and read only headers
+    content_type, content_string = contents.split(",")
+    decoded = base64.b64decode(content_string)
+
+    try:
+        if "csv" in filename:
+            df = pd.read_csv(io.StringIO(decoded.decode("utf-8")), nrows=0)
+        elif "parquet" in filename:
+            df = pd.read_parquet(io.BytesIO(decoded)).head(0)
+        else:
+            return []
+
+        return [{"label": col, "value": col} for col in df.columns]
+
+    except Exception as e:
+        return []
+
+
+# Callback to read selected columns and store them in JSON-compatible format
+@app.callback(
+    [
+        Output("stored-data", "data"),
+        Output("upload-status-message", "children", allow_duplicate=True),
+    ],
+    Input("column-dropdown", "value"),
+    State("stored-file", "data"),
+    State("upload-data", "filename"),
+    State("row-limit", "value"),
+    prevent_initial_call=True,
+)
+def store_selected_columns(selected_columns, contents, filename, row_limit):
+    if not selected_columns or contents is None:
+        return None, "Please select columns to load the data."
+
+    content_type, content_string = contents.split(",")
+    decoded = base64.b64decode(content_string)
+
+    try:
+        if "csv" in filename:
+            df = pd.read_csv(
+                io.StringIO(decoded.decode("utf-8")),
+                usecols=selected_columns,
+                nrows=row_limit,
+            )
+        elif "parquet" in filename:
+            df = pd.read_parquet(io.BytesIO(decoded), columns=selected_columns).head(
+                row_limit
+            )
+        else:
+            return None, "Unsupported file format."
+
+        # Store the data as JSON-compatible dictionary
+        data_store = df.to_dict("records")
+        return data_store, "Data stored successfully with selected columns!"
+
+    except Exception as e:
+        return None, f"There was an error processing the file: {str(e)}"
+
+
+# # Callback to process uploaded file and store content in dcc.Store
+# @app.callback(
+#     [Output('stored-data', 'data'), Output('upload-status-message', 'children')],
+#     Input('upload-data', 'contents'),
+#     State('upload-data', 'filename'),
+#     State('row-limit', 'value')
+# )
+# def handle_file_upload(contents, filename, row_limit):
+#     if contents is None:
+#         return None, "No file uploaded yet."
+
+#     # Decode the uploaded file contents
+#     try:
+#         content_type, content_string = contents.split(',')
+#         decoded = base64.b64decode(content_string)
+
+#         # Determine file type and read content
+#         if 'csv' in filename:
+#             # Read limited rows from CSV
+#             df = pd.read_csv(io.StringIO(decoded.decode('utf-8')), nrows=row_limit)
+#         elif 'parquet' in filename:
+#             # Read limited rows from Parquet
+#             df = pd.read_parquet(io.BytesIO(decoded)).head(row_limit)
+#         else:
+#             return None, "Unsupported file format. Please upload a CSV or Parquet file."
+
+#         # Store data as JSON-compatible dictionary
+#         data_store = df.to_dict('records')
+#         return data_store, "File uploaded successfully!"
+
+#     except Exception as e:
+#         return None, f"There was an error processing the file: {str(e)}"
 
 
 # Update axis dropdown options based on selected data types
@@ -293,7 +459,7 @@ def update_axis_dropdowns(data_store, x_data_type, y_data_type, color_data_type)
                 "%Y/%m/%d",
                 "%d %b %Y",
                 "%d %B %Y",
-            ] # Extendable list of formats
+            ]  # Extendable list of formats
 
             for date_format in date_formats:
                 try:
@@ -302,7 +468,8 @@ def update_axis_dropdowns(data_store, x_data_type, y_data_type, color_data_type)
                         continue
                     # Attempt parsing to check date validity
                     parsed_dates = [
-                        datetime.strptime(value, date_format) for value in non_null_values
+                        datetime.strptime(value, date_format)
+                        for value in non_null_values
                     ]
                     return date_format  # Return matching format if parsing successful
                 except ValueError:
@@ -316,7 +483,9 @@ def update_axis_dropdowns(data_store, x_data_type, y_data_type, color_data_type)
             col for col in df.columns if df[col].dtype in [pl.Utf8, pl.Categorical]
         ]
         numerical_columns = [
-            col for col in df.columns if df[col].dtype in [pl.Float64, pl.Int64, pl.Int32, pl.Float32]
+            col
+            for col in df.columns
+            if df[col].dtype in [pl.Float64, pl.Int64, pl.Int32, pl.Float32]
         ]
 
         # Convert detected date columns to datetime format using identified format
@@ -336,18 +505,20 @@ def update_axis_dropdowns(data_store, x_data_type, y_data_type, color_data_type)
                 "all": df.columns,
             }
             # Default to empty list if data_type not in options_map
-            return [{"label": col, "value": col} for col in options_map.get(data_type, [])]
+            return [
+                {"label": col, "value": col} for col in options_map.get(data_type, [])
+            ]
 
         # Generate dropdown options for each axis
         x_options = get_columns_by_type(x_data_type)
         y_options = get_columns_by_type(y_data_type)
-        color_options = get_columns_by_type(color_data_type) + [{"label": "None", "value": "None"}]
+        color_options = get_columns_by_type(color_data_type) + [
+            {"label": "None", "value": "None"}
+        ]
 
-        return x_options, y_options, color_options,"None"
-    else: 
-        return [],[],["None"],"None"
-
-
+        return x_options, y_options, color_options, "None"
+    else:
+        return [], [], ["None"], "None"
 
 
 # Callback to update the charts based on user selections
@@ -366,36 +537,40 @@ def update_axis_dropdowns(data_store, x_data_type, y_data_type, color_data_type)
     State("stored-data", "data"),
     prevent_initial_call=True,
 )
-def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size, data_store):
+def update_chart(
+    n_clicks, x_col, y_col, color_col, agg_method, window_size, data_store
+):
     def is_date_column(column):
-            date_formats = [
-                "%B-%Y",
-                "%b-%Y",
-                "%Y-%m-%d",
-                "%d-%m-%Y",
-                "%m/%d/%Y",
-                "%Y/%m/%d",
-                "%d %b %Y",
-                "%d %B %Y",
-            ] # Extendable list of formats
+        date_formats = [
+            "%B-%Y",
+            "%b-%Y",
+            "%Y-%m-%d",
+            "%d-%m-%Y",
+            "%m/%d/%Y",
+            "%Y/%m/%d",
+            "%d %b %Y",
+            "%d %B %Y",
+        ]  # Extendable list of formats
 
-            for date_format in date_formats:
-                try:
-                    non_null_values = column.drop_nulls()
-                    if non_null_values.is_empty():
-                        continue
-                    # Attempt parsing to check date validity
-                    parsed_dates = [
-                        datetime.strptime(value, date_format) for value in non_null_values
-                    ]
-                    return date_format  # Return matching format if parsing successful
-                except ValueError:
+        for date_format in date_formats:
+            try:
+                non_null_values = column.drop_nulls()
+                if non_null_values.is_empty():
                     continue
-            return None
+                # Attempt parsing to check date validity
+                parsed_dates = [
+                    datetime.strptime(value, date_format) for value in non_null_values
+                ]
+                return date_format  # Return matching format if parsing successful
+            except ValueError:
+                continue
+        return None
+
     df = pl.from_pandas(pd.DataFrame.from_records(data_store))
     date_format = is_date_column(df[x_col].cast(str))
-    df = df.with_columns(pl.col(x_col).str.strptime(pl.Date, format=date_format).alias(x_col)
-                )
+    df = df.with_columns(
+        pl.col(x_col).str.strptime(pl.Date, format=date_format).alias(x_col)
+    )
     # Figure for the main chart (line/bar with rolling mean)
     fig_main = go.Figure()
 
@@ -455,14 +630,10 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size, dat
             (t_critical * pl.col("Rolling SEM")).alias("Margin of Error")
         )
         filtered_df = filtered_df.with_columns(
-            (pl.col("Rolling Mean") - 2 * pl.col("Margin of Error")).alias(
-                "CI Lower"
-            )
+            (pl.col("Rolling Mean") - 2 * pl.col("Margin of Error")).alias("CI Lower")
         )
         filtered_df = filtered_df.with_columns(
-            (pl.col("Rolling Mean") + 2 * pl.col("Margin of Error")).alias(
-                "CI Upper"
-            )
+            (pl.col("Rolling Mean") + 2 * pl.col("Margin of Error")).alias("CI Upper")
         )
 
         fig_main.add_trace(
@@ -508,7 +679,6 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size, dat
                 x_col
             )
 
-
             fig_main.add_trace(
                 go.Scatter(
                     x=filtered_group[x_col].to_list(),
@@ -517,7 +687,6 @@ def update_chart(n_clicks, x_col, y_col, color_col, agg_method, window_size, dat
                     name=str(color_value),
                 )
             )
-
 
     fig_main.update_layout(
         barmode="overlay",
