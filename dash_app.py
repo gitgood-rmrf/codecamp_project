@@ -102,7 +102,11 @@ app.layout = dmc.MantineProvider(
                 dmc.GridCol(
                     [
                         dmc.MultiSelect(
-                            id="column-dropdown", label="Select columns to load"
+                            id="column-dropdown", 
+                            label="Select columns to load",
+                            clearable=True,
+                            searchable=True,
+                            limit=8,
                         ),
                     ],
                     span=4,
@@ -326,12 +330,13 @@ def handle_file_upload(contents, filename):
 # Callback to read and display column names for selection
 @app.callback(
     Output("column-dropdown", "data"),
+    Output("column-dropdown", "value"),
     Input("stored-file", "data"),
     State("upload-data", "filename"),
 )
 def populate_column_dropdown(contents, filename):
     if contents is None:
-        return []
+        return [],None
 
     # Decode content and read only headers
     content_type, content_string = contents.split(",")
@@ -343,12 +348,13 @@ def populate_column_dropdown(contents, filename):
         elif "parquet" in filename:
             df = pd.read_parquet(io.BytesIO(decoded)).head(0)
         else:
-            return []
-
-        return [{"label": col, "value": col} for col in df.columns]
+            return [],None
+        data = [{"label": col, "value": col} for col in df.columns]
+        values = [col for col in df.columns]
+        return data,values
 
     except Exception as e:
-        return []
+        return [],None
 
 
 # Callback to read selected columns and store them in JSON-compatible format
